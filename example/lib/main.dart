@@ -35,6 +35,7 @@ class UnityAdsExample extends StatefulWidget {
 
 class _UnityAdsExampleState extends State<UnityAdsExample> {
   bool _showBanner = false;
+  BannerAd? _bannerAd;
 
   @override
   void initState() {
@@ -43,14 +44,15 @@ class _UnityAdsExampleState extends State<UnityAdsExample> {
     UnityAds.init(
       gameId: AdManager.gameId,
       testMode: true,
-      onComplete: () => print('Initialization Complete'),
+      onComplete: () => debugPrint('Initialization Complete'),
       onFailed: (error, message) =>
-          print('Initialization Failed: $error $message'),
+          debugPrint('Initialization Failed: $error $message'),
     );
   }
 
   @override
   Widget build(BuildContext context) {
+    BannerAd? bannerAd = _bannerAd;
     return SizedBox(
       width: double.infinity,
       child: Column(
@@ -62,6 +64,7 @@ class _UnityAdsExampleState extends State<UnityAdsExample> {
             children: [
               ElevatedButton(
                 onPressed: () {
+                  _showBanner ? disposeBannerAd() : loadBannerAd();
                   setState(() {
                     _showBanner = !_showBanner;
                   });
@@ -78,17 +81,37 @@ class _UnityAdsExampleState extends State<UnityAdsExample> {
               ),
             ],
           ),
-          if (_showBanner)
-            UnityBannerAd(
-              placementId: AdManager.bannerAdPlacementId,
-              onLoad: (placementId) => print('Banner loaded: $placementId'),
-              onClick: (placementId) => print('Banner clicked: $placementId'),
-              onFailed: (placementId, error, message) =>
-                  print('Banner Ad $placementId failed: $error $message'),
-            ),
+          if (bannerAd != null)
+            AdWidget(ad: bannerAd),
         ],
       ),
     );
+  }
+
+  void loadBannerAd() {
+    BannerAd(
+      size: AdSize.standard,
+      placementId: AdManager.bannerAdPlacementId,
+      listener: BannerAdListener(
+        onAdLoaded: (ad) {
+          debugPrint('Banner loaded: ${ad.placementId}');
+          setState(() {
+            _bannerAd = ad as BannerAd?;
+          });
+        },
+        onAdFailedToLoad: (ad, error) {
+          debugPrint('Banner Ad ${ad.placementId} failed: $error');
+        },
+        onAdClicked: (ad) {
+          debugPrint('Banner clicked: ${ad.placementId}');
+        },
+      ),
+    ).load();
+  }
+
+  void disposeBannerAd() {
+    _bannerAd?.dispose();
+    _bannerAd = null;
   }
 }
 
@@ -113,13 +136,13 @@ class _VideoAdButtonState extends State<VideoAdButton> {
     UnityAds.load(
       placementId: widget.placementId,
       onComplete: (placementId) {
-        print('Load Complete $placementId');
+        debugPrint('Load Complete $placementId');
         setState(() {
           _loaded = true;
         });
       },
       onFailed: (placementId, error, message) =>
-          print('Load Failed $placementId: $error $message'),
+          debugPrint('Load Failed $placementId: $error $message'),
     );
   }
 
@@ -131,14 +154,14 @@ class _VideoAdButtonState extends State<VideoAdButton> {
               UnityAds.showVideoAd(
                 placementId: widget.placementId,
                 onComplete: (placementId) =>
-                    print('Video Ad $placementId completed'),
+                    debugPrint('Video Ad $placementId completed'),
                 onFailed: (placementId, error, message) =>
-                    print('Video Ad $placementId failed: $error $message'),
+                    debugPrint('Video Ad $placementId failed: $error $message'),
                 onStart: (placementId) =>
-                    print('Video Ad $placementId started'),
-                onClick: (placementId) => print('Video Ad $placementId click'),
+                    debugPrint('Video Ad $placementId started'),
+                onClick: (placementId) => debugPrint('Video Ad $placementId click'),
                 onSkipped: (placementId) =>
-                    print('Video Ad $placementId skipped'),
+                    debugPrint('Video Ad $placementId skipped'),
               );
             }
           : null,

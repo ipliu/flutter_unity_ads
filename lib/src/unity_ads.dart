@@ -1,11 +1,13 @@
 import 'package:flutter/services.dart';
 import 'package:unity_ads_plugin/src/privacy_consent.dart';
 
+import 'ad_instance_manager.dart';
 import 'constants.dart';
 
 /// Unity Ads plugin for Flutter applications.
 class UnityAds {
-  static const MethodChannel _channel = MethodChannel(mainChannel);
+  static final MethodChannel _channel = MethodChannel(
+      mainChannel, StandardMethodCodec(AdMessageCodec()));
 
   static final Map<String, _AdMethodChannel> _adChannels = {};
 
@@ -23,6 +25,10 @@ class UnityAds {
     Function? onComplete,
     Function(UnityAdsInitializationError error, String errorMessage)? onFailed,
   }) async {
+    /// Internal init to cleanup state for hot restart.
+    /// This is a workaround for https://github.com/flutter/flutter/issues/7160.
+    _channel.invokeMethod('_init');
+
     Map<String, dynamic> arguments = {
       gameIdParameter: gameId,
       testModeParameter: testMode,

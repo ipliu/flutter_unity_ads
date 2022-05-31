@@ -6,10 +6,11 @@ import static com.rebeloid.unity_ads.UnityAdsConstants.SERVER_ID_PARAMETER;
 import android.app.Activity;
 import android.content.Context;
 import android.provider.Settings;
+import android.util.Log;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 
-import com.rebeloid.unity_ads.banner.BannerAdFactory;
 import com.rebeloid.unity_ads.privacy.PrivacyConsent;
 import com.unity3d.ads.UnityAds;
 import com.unity3d.ads.metadata.PlayerMetaData;
@@ -25,35 +26,61 @@ import io.flutter.plugin.common.MethodCall;
 import io.flutter.plugin.common.MethodChannel;
 import io.flutter.plugin.common.MethodChannel.MethodCallHandler;
 import io.flutter.plugin.common.MethodChannel.Result;
+import io.flutter.plugin.common.StandardMethodCodec;
 
 /**
  * Unity Ads Plugin
  */
 public class UnityAdsPlugin implements FlutterPlugin, MethodCallHandler, ActivityAware {
+
+    private static final String TAG = "UnityAdsPlugin";
+
+    private static <T> T requireNonNull(T obj) {
+        if (obj == null) {
+            throw new IllegalArgumentException();
+        }
+        return obj;
+    }
+
+    // This is always null when not using v2 embedding.
+    @Nullable private FlutterPluginBinding pluginBinding;
+    @Nullable private AdInstanceManager instanceManager;
+    @Nullable private AdMessageCodec adMessageCodec;
+
     private MethodChannel channel;
     private Context context;
     private Activity activity;
     private Map<String, MethodChannel> placementChannels;
     private BinaryMessenger binaryMessenger;
-    private BannerAdFactory bannerAdFactory;
     private PrivacyConsent privacyConsent;
 
     @Override
     public void onAttachedToEngine(@NonNull FlutterPluginBinding flutterPluginBinding) {
-        channel = new MethodChannel(flutterPluginBinding.getBinaryMessenger(), UnityAdsConstants.MAIN_CHANNEL);
+        pluginBinding = flutterPluginBinding;
+        adMessageCodec = new AdMessageCodec(flutterPluginBinding.getApplicationContext());
+        channel = new MethodChannel(
+                flutterPluginBinding.getBinaryMessenger(),
+                UnityAdsConstants.MAIN_CHANNEL,
+                new StandardMethodCodec(adMessageCodec));
         channel.setMethodCallHandler(this);
+        instanceManager = new AdInstanceManager(channel);
         context = flutterPluginBinding.getApplicationContext();
         binaryMessenger = flutterPluginBinding.getBinaryMessenger();
         placementChannels = new HashMap<>();
         privacyConsent = new PrivacyConsent();
 
-        bannerAdFactory = new BannerAdFactory(binaryMessenger);
         flutterPluginBinding.getPlatformViewRegistry()
-                .registerViewFactory(UnityAdsConstants.BANNER_AD_CHANNEL, bannerAdFactory);
+                .registerViewFactory(UnityAdsConstants.MAIN_CHANNEL + "/ad_widget",
+                        new UnityAdsViewFactory(instanceManager));
     }
 
     @Override
     public void onMethodCall(@NonNull MethodCall call, @NonNull Result result) {
+        if (instanceManager == null || pluginBinding == null) {
+            Log.e(TAG, "method call received before instanceManager initialized: " + call.method);
+            return;
+        }
+
         Map<?, ?> arguments = (Map<?, ?>) call.arguments;
 
         switch (call.method) {
@@ -69,6 +96,42 @@ public class UnityAdsPlugin implements FlutterPlugin, MethodCallHandler, Activit
             case UnityAdsConstants.PRIVACY_CONSENT_SET_METHOD:
                 result.success(privacyConsent.set(arguments));
                 break;
+            case "_init":
+                // Internal init. This is necessary to cleanup state on hot restart.
+                instanceManager.disposeAllAds();
+                result.success(null);
+                break;
+            case "loadBannerAd":
+                final FlutterBannerAd bannerAd =
+                        new FlutterBannerAd(
+                                requireNonNull(call.<Integer>argument("adId")),
+                                instanceManager,
+                                requireNonNull(call.argument("placementId")),
+                                requireNonNull(call.argument("size")));
+                instanceManager.trackAd(
+                        bannerAd, requireNonNull(call.<Integer>argument("adId")));
+                bannerAd.load();
+                result.success(null);
+                break;
+            case "disposeAd":
+                instanceManager.disposeAd(requireNonNull(call.<Integer>argument("adId")));
+                result.success(null);
+                break;
+            case "getAdSize":
+                FlutterAd ad = instanceManager.adForId(
+                        requireNonNull(call.<Integer>argument("adId")));
+                if (ad == null) {
+                    // This was called on a dart ad container that hasn't been loaded yet.
+                    result.success(null);
+                } else if (ad instanceof FlutterBannerAd) {
+                    result.success(((FlutterBannerAd) ad).getAdSize());
+                } else {
+                    result.error(
+                            "unexpected_ad_type",
+                            "Unexpected ad type for getAdSize: " + ad,
+                            null);
+                }
+                break;
             default:
                 result.notImplemented();
         }
@@ -76,29 +139,53 @@ public class UnityAdsPlugin implements FlutterPlugin, MethodCallHandler, Activit
 
     @Override
     public void onDetachedFromEngine(@NonNull FlutterPluginBinding binding) {
+        if (instanceManager != null) {
+            instanceManager.disposeAllAds();
+        }
         channel.setMethodCallHandler(null);
     }
 
     @Override
     public void onAttachedToActivity(@NonNull ActivityPluginBinding binding) {
         activity = binding.getActivity();
-        bannerAdFactory.setActivity(activity);
         privacyConsent.setActivity(activity);
+        if (instanceManager != null) {
+            instanceManager.setActivity(binding.getActivity());
+        }
+        if (adMessageCodec != null) {
+            adMessageCodec.setContext(binding.getActivity());
+        }
     }
 
     @Override
     public void onDetachedFromActivityForConfigChanges() {
-
+        // Use the application context
+        if (adMessageCodec != null && pluginBinding != null) {
+            adMessageCodec.setContext(pluginBinding.getApplicationContext());
+        }
+        if (instanceManager != null) {
+            instanceManager.setActivity(null);
+        }
     }
 
     @Override
     public void onReattachedToActivityForConfigChanges(@NonNull ActivityPluginBinding binding) {
-
+        if (instanceManager != null) {
+            instanceManager.setActivity(binding.getActivity());
+        }
+        if (adMessageCodec != null) {
+            adMessageCodec.setContext(binding.getActivity());
+        }
     }
 
     @Override
     public void onDetachedFromActivity() {
-
+        if (adMessageCodec != null && pluginBinding != null) {
+            adMessageCodec.setContext(pluginBinding.getApplicationContext());
+        }
+        if (instanceManager != null) {
+            instanceManager.setActivity(null);
+        }
     }
 
     private boolean initialize(Map<?, ?> args) {
